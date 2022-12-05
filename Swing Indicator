@@ -1,0 +1,141 @@
+import pandas as pd
+import pandas_ta as ta
+import yfinance as yf
+import numpy as np
+import math
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import os
+
+
+PLOT_DIR = "C:\\dev\\trading\\tradesystem1\\results\\plots\\"
+
+
+def range_size(df: pd.DataFrame, range_period: float, range_multiplier: int):
+    wper = range_period * 2 - 1
+    # last candle is last index, not 0
+    average_range = ta.ema(df.diff().abs(), range_period)
+    AC = ta.ema(average_range, wper) * range_multiplier
+    return AC
+
+
+def range_filter(x: pd.DataFrame, r: pd.DataFrame) -> pd.DataFrame:
+    range_filt = x.copy()
+    hi_band = x.copy()
+    lo_band = x.copy()
+
+    for i in range(x.size):
+        if i < 1:
+            continue
+        if math.isnan(r[i]):
+            continue
+        if x[i] > nz(range_filt[i - 1]):
+            if x[i] - r[i] < nz(range_filt[i - 1]):
+                range_filt[i] = nz(range_filt[i - 1])
+            else:
+                range_filt[i] = x[i] - r[i]
+        else:
+            if x[i] + r[i] > nz(range_filt[i - 1]):
+                range_filt[i] = nz(range_filt[i - 1])
+            else:
+                range_filt[i] = x[i] + r[i]
+
+        hi_band[i] = range_filt[i] + r[i]
+        lo_band[i] = range_filt[i] - r[i]
+
+    return hi_band, lo_band, range_filt
+
+
+def nz(x) -> float:
+    res = x
+    if math.isnan(x):
+        res = 0.0
+
+    return res
+
+
+def plot_chart(symbol, df):
+    title = f"{symbol} VuManChu Swing Indicator Chart"
+    fig = make_subplots(rows=1, cols=1, subplot_titles=[title], \
+                        specs=[[{"rowspan": 1, "secondary_y": True}]], \
+                        vertical_spacing=0.01, shared_xaxes=False)
+
+    #  Price chart
+
+    fig.add_trace(go.Scatter(x=df.index, y=df['Close'], line=dict(color="blue", width=1), name="Close"),
+                  row=1, col=1)
+    """
+    fig.add_trace(
+        go.Scatter(x=df.index, y=df['up_trend_price'], line=dict(color="green", width=1), name=f"Up trend"),
+        row=1, col=1)
+
+    fig.add_trace(go.Scatter(x=df.index, y=df['down_trend_price'], line=dict(color="red", width=1), name=f"Down trend"),
+                  row=1, col=1)
+    """
+    #  VuManChu Bands
+    """
+    fig.add_trace(go.Scatter(x=df.index, y=df['range_filter'], line=dict(color="orange", width=1), name=f"Range Filter"),
+                  row=1, col=1)
+    """
+    fig.add_trace(go.Scatter(x=df.index, y=df['hi_band'], line=dict(color="orange", width=1), name=f"High Band"),
+                  row=1, col=1)
+    fig.add_trace(
+        go.Scatter(x=df.index, y=df['lo_band'], line=dict(color="purple", width=1), name=f"Low Band"),
+        row=1, col=1)
+
+    """
+    #  Signals
+    fig.add_trace(go.Scatter(x=df.index, y=df['long_entry'], marker_symbol="arrow-up", marker=dict(
+        color='green', size=6), mode='markers', name='Long entry'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['short_entry'], marker_symbol="arrow-down", marker=dict(
+        color='red', size=6), mode='markers', name='Short entry'), row=1, col=1)
+    """
+
+    fig.update_layout(
+        title={'text': '', 'x': 0.5},
+        autosize=True,
+        width=2000, height=800,
+        xaxis={"rangeslider": {"visible": False}},
+        plot_bgcolor="#EFF5F8")
+    fig.update_yaxes(visible=False, secondary_y=True)
+
+    #  Create output file
+    file_name = f"{symbol}_vumanchu_swing_indicator.png"
+    fig.write_image(os.path.join(PLOT_DIR, file_name), format="png")
+
+
+if __name__ == '__main__':
+    symbol = "GOOGL"
+    interval = "60m"
+
+    #  Download data
+    data = yf.download(tickers=symbol, period="ytd", interval=interval)
+    df = pd.DataFrame(data)
+    df = df.tail(300)
+
+    #  VumanChu Indicator params
+    range_period = 20
+    range_multiplier = 3.5
+
+    smrng = range_size(df['Close'], range_period, range_multiplier)
+    hi_band, lo_band, range_filt = range_filter(df['Close'], smrng)
+
+    #  Add to df
+    df['hi_band'] = hi_band
+    df['lo_band'] = lo_band
+    df['range_filter'] = range_filt
+
+    #  Add conditions
+    df['up_trend'] = np.where((df['range_filter'] >= df['range_filter'].shift(1)), 1, 0)
+    df['down_trend'] = np.where((df['range_filter'] <= df['range_filter'].shift()), 1, 0)
+    df['up_trend_price'] = np.where((df['range_filter'] >= df['range_filter'].shift(1)), df['Close'], np.nan)
+    df['down_trend_price'] = np.where((df['range_filter'] <= df['range_filter'].shift()), df['Close'], np.nan)
+
+    #  Signals
+    df['long_entry'] = np.where(((df['Close'] > df['range_filter']) & (df['Close'] > df['Close'].shift()) & (df['up_trend'] > 0)) | \
+                        ((df['Close'] > df['range_filter']) & (df['Close'] < df['Close'].shift()) & (df['up_trend'] > 0)), df['Close'], np.nan)
+
+    df['short_entry'] = np.where(((df['Close'] < df['range_filter']) & (df['Close'] < df['Close'].shift()) & (df['down_trend'] > 0)) | \
+                        ((df['Close'] < df['range_filter']) & (df['Close'] < df['Close'].shift()) & (df['down_trend'] > 0)), df['Close'], np.nan)
+
+    plot_chart(symbol, df)
